@@ -1,0 +1,59 @@
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+
+var config = require("./config.js");
+var Promise = require('bluebird');
+var mqtt = require('mqtt');
+var shortid = require('shortid');
+var jsonfile = require('jsonfile');
+
+var device_unique_name = 'XYZ'
+
+var device_type = "TYPE";
+
+// mqtt_client
+var mqtt_client = mqtt.connect(config.mqtt_url, {username: "xyz", password: "xyz"});
+
+
+
+var __mqtt_pub = function() {
+  return new Promise(function (resolve, reject) {
+    var topic = "device/" + device_type + "/" + device_unique_name + "/ota_update";
+
+    var corr_id = shortid.generate();
+
+    var cmd_json = {corr_id: corr_id, ota_update: 1};
+    cmd_json = JSON.stringify(cmd_json);
+
+    var options = {
+      qos: 2,
+      retain: false 
+    };
+    
+    console.log("cmd_json is: ");
+    console.log(cmd_json);
+
+    mqtt_client.publish(topic, cmd_json, options, function(){
+      var obj = {
+        message: "Pub to topic, and done",
+        mqtt_topic: topic
+      };
+      resolve(obj);
+    });
+  });
+}
+
+
+var main = function() {
+  __mqtt_pub().then(function(msg_obj){
+    console.log("callback after pub:");
+    console.log(msg_obj);
+
+    mqtt_client.end();
+    process.exit();  
+  });
+}
+
+
+// main
+main();
+

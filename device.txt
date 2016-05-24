@@ -1,0 +1,234 @@
+#include <ESP8266httpUpdate.h>
+#include <ESP8266WiFi.h>
+#include <ArduinoJson.h>
+#include <AsyncMqttClient.h>
+
+
+// func
+void ota_update(void);
+
+const char* ssid = "replace_your_ssid";
+const char* password = "replace_your_password";
+
+String device_id = "XYZ";
+String device_type = "TYPE";
+
+// mqtt server
+static const IPAddress mqtt_server_ip(xx, xx, xx, xx);
+
+
+static const char* mqtt_username = "xyz";
+static const char* mqtt_password = "xyz";
+
+// mqtt
+AsyncMqttClient mqtt_client;
+long mqtt_last_reconn_attempt = 0;
+
+
+String get_mqtt_client_name() {
+  String mqtt_client_name = "mqtt_client_" + String(WiFi.macAddress());
+  return mqtt_client_name;
+}
+
+
+String get_topic_ota_update(String device_id) {
+  String topic = "device/" + device_type + "/" + device_id + "/ota_update";
+  return topic;
+}
+
+void on_mqtt_connect() {
+  String ota_update_topic = get_topic_ota_update(device_id);
+
+  // pub and sub
+  Serial.println("on mqtt connect");
+  Serial.println("sub to these: ");
+  Serial.println(ota_update_topic.c_str());
+
+  mqtt_client.subscribe(ota_update_topic.c_str(), 2);
+}
+
+
+void on_mqtt_publish(
+  const char* topic, 
+  const char* payload, 
+  uint8_t qos, 
+  size_t len, 
+  size_t index, 
+  size_t total
+) {
+  Serial.println();
+  Serial.println("--------Publish received-----------");
+  Serial.print("  topic: ");
+  Serial.println(topic);
+
+  Serial.print("  payload: ");
+  Serial.println(payload);
+
+  Serial.print("  qos: ");
+  Serial.println(qos);
+
+  Serial.print("  len: ");
+  Serial.println(len);
+
+  Serial.print("  index: ");
+  Serial.println(index);
+
+  Serial.print("  total: ");
+  Serial.println(total);
+
+  String my_topic = String(topic);
+  String topic_ota_update = get_topic_ota_update(device_id);
+
+  StaticJsonBuffer<200> jsonBuffer;
+  JsonObject& root = jsonBuffer.parseObject(payload);
+
+  if(my_topic == topic_ota_update) {
+    int is_ota_update = 0;
+    if (!root.success())
+    {
+      Serial.println("Arduino json parsing failed, return");
+      return;
+    }
+    else {
+      Serial.println("Arduino json parsing good");
+      if(
+        root.containsKey("ota_update")
+      ) {
+        is_ota_update = root["ota_update"];
+        if(is_ota_update) {
+          Serial.println("mqtt: is ota update");
+
+          // NOTE: when a client fires a json command, it causes http connection refused
+          ota_update();
+        }
+        else {
+          Serial.println("ota update is fired, but not really a update");
+        }
+      }
+    }
+  }
+  else {
+    Serial.println("on published, not ota topic");
+  }
+
+}
+
+
+void mqtt_setup() {
+  // listener  
+  mqtt_client.onConnect(on_mqtt_connect);
+  mqtt_client.onPublish(on_mqtt_publish);
+
+  // var
+  String mqtt_client_name = get_mqtt_client_name();
+
+  mqtt_client.setServer(mqtt_server_ip, 1883);  
+
+  mqtt_client
+    .setKeepAlive(5)
+    //.setWill(connected_topic.c_str(), 2, true, "false")
+    .setCredentials(mqtt_username, mqtt_password)
+    .setClientId(mqtt_client_name.c_str());
+
+  Serial.println();
+  Serial.println("Connecting to mqtt broker");
+  mqtt_client.connect();
+  
+  Serial.println("Delay 1s");  
+  delay(1000);
+
+  if(mqtt_client.connected()) {
+    Serial.println("mqtt is connected");
+  }
+  else {
+    Serial.println("mqtt is NOT connected");
+  }
+}
+
+
+boolean mqtt_reconnect() {
+  String mqtt_client_name = get_mqtt_client_name();
+  String msg = mqtt_client_name + " is reconnected";
+  String ota_update_topic = get_topic_ota_update(device_id);
+
+  mqtt_client.connect();
+
+  if (mqtt_client.connected()) {
+    mqtt_client.subscribe(ota_update_topic.c_str(), 2);
+    Serial.println("good: mqtt able to reconnect");
+    return true;
+  }
+  else {
+    Serial.println("bad: mqtt not able to reconnect");
+    return false;
+  }
+
+}
+
+
+void mqtt_loop() {
+  if (!mqtt_client.connected()) {
+    long now = millis();
+    if (now - mqtt_last_reconn_attempt > 5000) {
+      mqtt_last_reconn_attempt = now;
+      if (mqtt_reconnect()) {
+        mqtt_last_reconn_attempt = 0;
+      }
+    }
+  } else {
+    
+  }
+}
+
+
+
+void ota_update() {
+  Serial.println("ota update delay 2s");
+
+  //
+  t_httpUpdate_return ret = ESPhttpUpdate.update("http://myhost.com/esp_http_update.ino.bin");
+
+  Serial.println("Done: ESPhttpUpdate.update");
+
+  switch(ret) {
+    case HTTP_UPDATE_FAILED:
+      Serial.printf("http update failed: (%d): %s\n", ESPhttpUpdate.getLastError(), ESPhttpUpdate.getLastErrorString().c_str());
+      break;
+    case HTTP_UPDATE_NO_UPDATES:
+      Serial.println("no http update\n");
+    case HTTP_UPDATE_OK:
+      Serial.println("http update ok\n");
+    default:
+			Serial.printf("switch default, error code: %d\n",(int)ret);
+			break;
+  }
+    
+}
+
+
+void init_setup() {
+  Serial.begin(115200);
+
+  Serial.println();
+  Serial.println("booting");
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+  while (WiFi.waitForConnectResult() != WL_CONNECTED) {
+    Serial.println("Connection Failed! Rebooting...");
+    delay(5000);
+    ESP.restart();
+  }
+  
+}
+
+
+void setup() {
+  init_setup();
+  mqtt_setup();
+}
+
+void loop() {
+  mqtt_loop();
+}
+
